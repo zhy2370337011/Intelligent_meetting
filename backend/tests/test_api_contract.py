@@ -1782,6 +1782,50 @@ class ApiContractTest(unittest.TestCase):
             ["diarization-SPEAKER_00", "diarization-SPEAKER_01"],
         )
 
+    def test_offline_diarization_does_not_recluster_anonymous_speaker_keys(self):
+        """离线 3D-Speaker 的匿名 key 不能再被实时短句 embedding 二次聚类。
+
+        导入会议已经用整场上下文完成说话人分离；若这里再次提取短窗口 CAM++ embedding，
+        两个真实人物可能因为短句相似而被压成同一簇。测试锁定“只查询已注册声纹姓名”的边界。
+        """
+
+        embedding_calls = 0
+
+        class AnonymousVoiceprintClient:
+            def __init__(self, base_url):
+                self.base_url = base_url
+
+            def embedding(self, **kwargs):
+                nonlocal embedding_calls
+                embedding_calls += 1
+                return {"embedding": [1.0, 0.0]}
+
+            def match(self, **kwargs):
+                return {"matches": []}
+
+        old_url = main_module.VOICEPRINT_GATEWAY_BASE_URL
+        old_client = main_module.LocalVoiceprintClient
+        old_window = main_module._audio_window_for_voiceprint
+        main_module.VOICEPRINT_GATEWAY_BASE_URL = "http://127.0.0.1:8100"
+        main_module.LocalVoiceprintClient = AnonymousVoiceprintClient
+        # 返回空字符串可以绕过真实 ffmpeg 和临时文件，同时仍执行声纹查询分支。
+        main_module._audio_window_for_voiceprint = lambda *_args, **_kwargs: ""
+        try:
+            mapped = main_module._build_diarization_identity_map(
+                [
+                    {"speaker": "SPEAKER_00", "startMs": 0, "endMs": 4000},
+                    {"speaker": "SPEAKER_01", "startMs": 5000, "endMs": 9000},
+                ],
+                "meeting.wav",
+            )
+        finally:
+            main_module.VOICEPRINT_GATEWAY_BASE_URL = old_url
+            main_module.LocalVoiceprintClient = old_client
+            main_module._audio_window_for_voiceprint = old_window
+
+        self.assertEqual(mapped, {})
+        self.assertEqual(embedding_calls, 0, "离线匿名身份必须信任整场 diarization，不能再跑实时短句聚类")
+
     def test_long_import_asr_segment_is_split_at_diarization_speaker_changes(self):
         """一个 30 秒 ASR 文本段内的多人轮流发言必须拆回独立底层 segment。
 

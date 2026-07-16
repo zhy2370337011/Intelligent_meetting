@@ -553,6 +553,47 @@ async function auditImportedPlayback(session, meetingId) {
   }
   const importReady = await waitForEvaluation(session, `Boolean(document.querySelector('[data-open-import="${meetingId}"]'))`, 40, 150);
   assert.equal(importReady, true, "temporary imported-media row did not render");
+  const mergeContract = await session.evaluate(`(() => {
+    const first = { id: 'a', speakerName: '发言人2', speakerClusterId: 'diarization-SPEAKER_01', startMs: 0, endMs: 1000 };
+    const sameAfterSilence = { id: 'b', speakerName: '发言人2', speakerClusterId: 'diarization-SPEAKER_01', startMs: 6000, endMs: 7000 };
+    const otherSpeaker = { id: 'c', speakerName: '发言人1', speakerClusterId: 'diarization-SPEAKER_00', startMs: 6000, endMs: 7000 };
+    return {
+      importedSameSpeaker: groupTranscriptSegments([first, sameAfterSilence], { maxGapMs: 6000 }).length,
+      realtimeSameSpeaker: groupTranscriptSegments([first, sameAfterSilence], { maxGapMs: 3000 }).length,
+      importedDifferentSpeaker: groupTranscriptSegments([first, otherSpeaker], { maxGapMs: 6000 }).length,
+    };
+  })()`);
+  assert.deepEqual(
+    mergeContract,
+    { importedSameSpeaker: 1, realtimeSameSpeaker: 2, importedDifferentSpeaker: 2 },
+    `transcript merge boundaries regressed: ${JSON.stringify(mergeContract)}`,
+  );
+  console.log("PASS transcript-merge import=1 realtime=2 different-speaker=2");
+  // 用真实 WAV 模拟用户在文件选择器完成选择。这里不提交转写，专门验证待上传台账在
+  // loadedmetadata 后显示真实时长和绝对时间，而不是历史的“待识别/刚刚”占位文案。
+  const metadataRow = await session.evaluate(`(async () => {
+    const response = await fetch('${apiBase}/api/meetings/${meetingId}/exports/audio', { method: 'POST' });
+    if (!response.ok) return { error: 'fixture audio HTTP ' + response.status };
+    const blob = await response.blob();
+    const file = new File([blob], 'browser-ledger-metadata.wav', { type: 'audio/wav', lastModified: Date.now() });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    const input = document.querySelector('#audioFileInput');
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const row = [...document.querySelectorAll('#importFileList tr')]
+        .find((item) => item.textContent.includes('browser-ledger-metadata.wav'));
+      const cells = row ? [...row.querySelectorAll('td')].map((cell) => cell.textContent.trim()) : [];
+      if (cells.length && !cells.includes('读取中…')) return { duration: cells[3], createdAt: cells[4] };
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+    return null;
+  })()`);
+  assert.ok(/^\d{2}:\d{2}$/.test(metadataRow?.duration || ""), `import ledger duration is not real: ${JSON.stringify(metadataRow)}`);
+  assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(metadataRow?.createdAt || ""), `import ledger created time is not absolute: ${JSON.stringify(metadataRow)}`);
+  console.log(`PASS import-ledger-metadata duration=${metadataRow.duration} createdAt=${metadataRow.createdAt}`);
   await session.evaluate(`document.querySelector('[data-open-import="${meetingId}"]').click()`);
   const mediaReady = await waitForEvaluation(
     session,

@@ -118,6 +118,10 @@ const state = {
   rooms: [],
   jobs: [],
   selectedFiles: [],
+  // 浏览器 File 对象本身不包含媒体时长。选择文件后异步读取 duration，并把选择时刻固定下来，
+  // 导入台账即可显示真实值，而不是写死“待识别/刚刚”。该元数据只描述当前待上传批次，
+  // 历史记录仍以后端持久化的会议和逐字稿时间轴为准。
+  importFileMetadata: {},
   createMeetingAttachmentFile: null,
   // 导入转写的运行态只用于当前页面展示，不落库；真正的会议、文件、任务状态仍以后端为准。
   // 之前点击“开始处理”后前端会一直等待后端转写完成，用户看不到任何即时反馈，容易误以为按钮失效。
@@ -530,15 +534,17 @@ function renderImportPage() {
   const uploadedRows = state.selectedFiles.map((file, index) => ({
     id: `selected-${index}`,
     fileName: file.name,
-    createdAt: "刚刚",
-    duration: "待识别",
+    createdAt: state.importFileMetadata[file.name]?.createdAt || formatLocalDateTime(new Date(file.lastModified || Date.now())),
+    duration: Number.isFinite(state.importFileMetadata[file.name]?.durationMs)
+      ? formatTime(state.importFileMetadata[file.name].durationMs)
+      : Object.hasOwn(state.importFileMetadata, file.name) ? "无法读取" : "读取中…",
     statusText: state.importFileStatuses[file.name] || "待上传",
     meetingId: state.importResults.find((item) => item.fileName === file.name)?.meeting?.id || "",
   }));
   const historyRows = importRecords().map((meeting) => ({
     id: meeting.id,
     fileName: meeting.fileName || meeting.meetingName || "未命名文件",
-    createdAt: meeting.createdAt || "",
+    createdAt: formatLocalDateTime(meeting.createdAt),
     duration: formatMeetingDuration(meeting),
     statusText: processStatusText(meeting.processStatus),
     meetingId: meeting.id,
@@ -570,8 +576,51 @@ function renderImportPage() {
 }
 
 function formatMeetingDuration(meeting) {
-  const durationMs = Math.max(0, ...(meeting.segments || []).map((segment) => Number(segment.endMs || segment.startMs || 0)));
+  // 新上传文件优先使用后端记录的媒体时长；旧数据没有该字段时，继续从底层 segment
+  // 的最大结束时间推导，保证升级前的导入记录也能正常显示。
+  const persistedDurationMs = Number(meeting.durationMs || meeting.files?.[0]?.durationMs || 0);
+  const durationMs = persistedDurationMs || Math.max(0, ...(meeting.segments || []).map((segment) => Number(segment.endMs || segment.startMs || 0)));
   return durationMs ? formatTime(durationMs) : "未知";
+}
+
+function formatLocalDateTime(value) {
+  // 统一使用绝对日期时间，避免“刚刚”在页面停留数小时后仍不变化，也便于用户核对导入批次。
+  const date = value instanceof Date ? value : new Date(value || "");
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function readLocalMediaDurationMs(file) {
+  // 使用浏览器原生媒体解码器读取音视频容器时长，不上传文件、不解码整段 PCM。
+  // 无法识别的容器返回 null，后续完成转写后仍可由后端 segment 时间轴补齐。
+  return new Promise((resolve) => {
+    const media = document.createElement(file.type?.startsWith("video/") ? "video" : "audio");
+    const objectUrl = URL.createObjectURL(file);
+    const finish = (durationMs = null) => {
+      URL.revokeObjectURL(objectUrl);
+      media.removeAttribute("src");
+      resolve(durationMs);
+    };
+    media.preload = "metadata";
+    media.onloadedmetadata = () => {
+      const durationMs = Number.isFinite(media.duration) ? Math.max(0, Math.round(media.duration * 1000)) : null;
+      finish(durationMs);
+    };
+    media.onerror = () => finish(null);
+    media.src = objectUrl;
+  });
+}
+
+async function hydrateSelectedImportFileMetadata(files = []) {
+  const selectedAt = formatLocalDateTime(new Date());
+  // 并行读取多文件元数据，避免大批量选择时逐个等待；每个文件完成后一次性刷新台账。
+  const entries = await Promise.all(files.map(async (file) => [
+    file.name,
+    { createdAt: selectedAt, durationMs: await readLocalMediaDurationMs(file) },
+  ]));
+  state.importFileMetadata = Object.fromEntries(entries);
+  renderImportPage();
 }
 
 async function loadDisplayTranscriptView(meetingId) {
@@ -797,9 +846,10 @@ function transcriptSpeakerIdentityKey(segment = {}) {
   return `name:${segment.realtimeSessionToken || "record"}:${speakerName}`;
 }
 
-function groupTranscriptSegments(segments = []) {
-  // 只合并“相邻的同一轮发言”。三秒阈值允许 ASR/VAD 分片边界的小空隙，但会在长停顿后
-  // 新建发言框。缺失时间戳时无法证明间隔不超过三秒，因此保守地新开框，避免误合并历史脏数据。
+function groupTranscriptSegments(segments = [], { maxGapMs = 3000 } = {}) {
+  // 只合并“原始顺序相邻且身份相同”的片段。实时链路维持 3 秒边界，避免暂停/新会话误合并；
+  // 离线分离的时间戳常把句间静音计为 4～6 秒，详情调用方可单独放宽到 6 秒。
+  // 缺失时间戳时无法证明间隔满足阈值，因此保守地新开框，绝不跨其他发言人合并。
   const groups = [];
   for (const segment of segments) {
     const identityKey = transcriptSpeakerIdentityKey(segment);
@@ -815,7 +865,7 @@ function groupTranscriptSegments(segments = []) {
     const mayMerge = previousGroup
       && previousGroup.identityKey === identityKey
       && hasComparableTimes
-      && gapMs <= 3000;
+      && gapMs <= maxGapMs;
     if (mayMerge) {
       previousGroup.segments.push(segment);
       previousGroup.endMs = Math.max(Number(previousGroup.endMs || 0), Number(segment.endMs || segment.startMs || 0));
@@ -1061,7 +1111,7 @@ function renderMeetingDetailWorkspace() {
     if (speakerFilter.hidden && state.transcriptSpeakerFilter) state.transcriptSpeakerFilter = "";
   }
   const query = state.transcriptQuery.trim().toLowerCase();
-  const transcriptBlocks = groupTranscriptSegments(displayableSegments).filter((block) => {
+  const transcriptBlocks = groupTranscriptSegments(displayableSegments, { maxGapMs: imported ? 6000 : 3000 }).filter((block) => {
     const speakerMatches = !state.transcriptSpeakerFilter || state.transcriptSpeakerFilter === block.speakerName;
     const textMatches = !query || block.segments.some((segment) => {
       const visibleText = state.transcriptEditMode
@@ -4201,10 +4251,12 @@ function bindEvents() {
     }
     if (target.id === "audioFileInput") {
       state.selectedFiles = Array.from(target.files || []);
+      state.importFileMetadata = {};
       state.importFileStatuses = Object.fromEntries(state.selectedFiles.map((file) => [file.name, "待上传"]));
       // 重新选择文件代表开始一批新的导入任务，清空上一批转写结果，避免用户把历史结果误认为本次识别输出。
       state.importResults = [];
       renderImportPage();
+      void hydrateSelectedImportFileMetadata(state.selectedFiles);
       // 选择文件后先留在队列，允许用户确认语言、声纹库和识别优化，再显式点击“开始转写”。
     }
     if (target.id === "createMeetingAttachment") {

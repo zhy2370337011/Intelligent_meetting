@@ -80,6 +80,7 @@ from app.recognition_policy import (
 from app.realtime_lease import RealtimeLeaseRegistry
 from app.sensitive_policy import apply_sensitive_policy, freeze_sensitive_rule_snapshot, policy_snapshot_rules
 from app.realtime_speaker import (
+    DEFAULT_VOICEPRINT_ACCEPTANCE_THRESHOLD,
     REALTIME_FINAL_SEGMENT_CLUSTER_COSINE_THRESHOLD,
     RealtimeSpeakerTracker,
     SpeakerIdentity,
@@ -1712,12 +1713,12 @@ def _build_diarization_identity_map(
     diarization_segments: list[dict[str, Any]],
     audio_path: str,
 ) -> dict[str, dict[str, Any]]:
-    """把离线 diarization 的 speaker key 映射到实时链路同款会议内身份。
+    """为离线分离出的 speaker key 补充“已注册人员”身份，不重算匿名说话人簇。
 
-    每个 3D-Speaker key 只取最长代表窗口提取一次 CAM++ embedding，既避免长会议按每句话
-    重复推理，又复用实时会议已经校准的 0.58 聚类阈值。这样同一个人被 diarization 临时拆成
-    两个 key 时仍能合并，真正不同的人则获得稳定的 speaker-1/2；原始 embedding 只留在本函数
-    tracker 内存中，返回值只包含可持久化身份字段。
+    3D-Speaker 已经利用整场音频完成多人聚类，结果里的 ``SPEAKER_00/01`` 才是导入会议的
+    主身份边界。旧实现又取每个 key 的一小段 CAM++ 向量交给实时短句 tracker 二次聚类，短片段
+    相似时会把不同的人压成一个人，正是导入后“所有人都是发言人1”的来源。现在匿名身份始终
+    保留原始 diarization key；只有达到声纹库高阈值的注册人员才覆盖姓名和 cluster。
     """
 
     if not audio_path or not VOICEPRINT_GATEWAY_BASE_URL:
@@ -1740,40 +1741,35 @@ def _build_diarization_identity_map(
             representatives[key] = item
 
     mapped: dict[str, dict[str, Any]] = {}
-    tracker = RealtimeSpeakerTracker(cluster_threshold=REALTIME_FINAL_SEGMENT_CLUSTER_COSINE_THRESHOLD)
     client = LocalVoiceprintClient(VOICEPRINT_GATEWAY_BASE_URL)
     for key, item in representatives.items():
         start_ms = int(item.get("startMs") or item.get("start_ms") or 0)
         end_ms = int(item.get("endMs") or item.get("end_ms") or start_ms)
         clip_path = ""
-        embedding: list[float] | None = None
         matched: dict[str, Any] | None = None
         try:
             clip_path = _audio_window_for_voiceprint(audio_path, start_ms, end_ms)
-            try:
-                embedding_payload = client.embedding(audio_path=clip_path)
-                embedding = list(embedding_payload.get("embedding") or []) or None
-            except Exception:
-                # embedding 与姓名匹配是两项独立能力；任一失败都不能阻断另一项或 ASR 文本。
-                embedding = None
             try:
                 matched = _first_voiceprint_match(client.match(audio_path=clip_path, top_k=10))
             except Exception:
                 matched = None
         except Exception:
-            embedding = None
             matched = None
         finally:
             if clip_path:
                 Path(clip_path).unlink(missing_ok=True)
-        if embedding is None and not matched:
+        confidence = float((matched or {}).get("voiceprintConfidence") or 0)
+        if not matched or confidence < DEFAULT_VOICEPRINT_ACCEPTANCE_THRESHOLD:
             continue
-        identity = tracker.identify(embedding, _voiceprint_match_for_tracker(matched))
-        # 无 embedding 时 tracker 的普通 fallback 不能证明两段属于同一人；只有可信声纹姓名
-        # 才允许写回。其余情况保留 diarization 自己的 key，避免多人被武断合并。
-        if embedding is None and identity.speaker_source != "voiceprint":
-            continue
-        mapped[key] = _speaker_identity_event_fields(identity)
+        voiceprint_id = str(matched.get("voiceprintId") or "").strip()
+        mapped[key] = {
+            "speakerName": matched.get("speakerName") or "未识别发言人",
+            "speakerTitle": matched.get("speakerTitle") or "",
+            "speakerClusterId": f"voiceprint-{voiceprint_id}",
+            "speakerSource": matched.get("speakerSource") or "voiceprint_match",
+            "voiceprintId": voiceprint_id,
+            "voiceprintConfidence": confidence,
+        }
     return mapped
 
 
