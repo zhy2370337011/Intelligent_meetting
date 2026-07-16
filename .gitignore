@@ -1,0 +1,33 @@
+# Python 虚拟环境和缓存，不应提交到代码仓库。
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+node_modules/
+
+# 本地环境变量和密钥文件，包含 DashScope API Key、智能体平台账号、token 等敏感信息。
+.env
+**/.env
+*.pem
+*.key
+
+# 运行时上传、导出、浏览器用户目录、截图和日志均由系统或验收脚本自动生成。
+# 这些目录可能包含真实会议录音、逐字稿数据库和数百 MB 的浏览器缓存，禁止进入 Git。
+backend/data/
+data/
+tmp/
+test-results/
+backend/tmp_*.wav
+*.log
+
+# 本地系统和编辑器文件。
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Superpowers visual-companion sessions are local design discussion artifacts.
+# They are useful while collaborating, but should not be committed with product code.
+.superpowers/

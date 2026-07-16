@@ -1,0 +1,28 @@
+# 本地小模型服务依赖。
+# 说明：
+# - FastAPI/uvicorn 用于启动 HTTP 服务。
+# - torch/torchaudio/soundfile/numpy 是音频模型推理基础依赖。
+# - funasr/modelscope 用于 FSMN-VAD、CAM++、3D-Speaker 等模型下载与推理。
+# - qwen-asr 提供 Qwen3-ForcedAligner-0.6B 的本地 Python 推理封装。
+
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.1
+python-multipart==0.0.20
+numpy
+soundfile
+torch
+torchaudio
+funasr
+modelscope
+# 3D-Speaker 的 ModelScope pipeline 会依赖这些通用组件：
+# - addict/simplejson/sortedcontainers 是 ModelScope 配置与注册表依赖。
+# - datasets/pillow 是 pipeline 输入与数据处理依赖。
+# - hdbscan 是 CAM++ 聚类式说话人日志的核心聚类依赖。
+addict
+simplejson
+sortedcontainers
+datasets
+pillow
+hdbscan
+qwen-asr==0.0.6

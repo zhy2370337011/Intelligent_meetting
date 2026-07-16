@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>智能会议系统</title>
+    <!-- A deliberate empty local favicon prevents a browser-only 404 from obscuring product errors in the audit. -->
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css?v=meeting-layout-20260716b" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="side-nav side-nav-clean" aria-label="智能会议功能栏">
+        <div class="side-brand-wordmark">智能会议</div>
+        <button class="side-nav-item active" data-route="records"><span>▦</span>会议列表</button>
+        <button class="side-nav-item" data-route="import"><span>＋</span>导入转写</button>
+        <button class="side-nav-item" data-route="voiceprints"><span>≋</span>声纹库</button>
+        <button class="side-nav-item" data-route="hotwords"><span>◎</span>识别优化</button>
+        <button class="side-nav-item" data-route="sensitive"><span>⊘</span>禁忌词</button>
+        <button class="side-nav-item" data-route="templates"><span>▣</span>纪要模板</button>
+        <button class="side-nav-item" data-route="integration"><span>⇄</span>系统对接</button>
+      </aside>
+
+      <div class="main-shell">
+        <header class="top-actions">
+          <div class="top-title">
+            <div>
+              <h1 id="pageTitle">会议列表</h1>
+              <p id="pageSubtitle">管理快速会议、实时转写、纪要、待办与对接状态。</p>
+            </div>
+          </div>
+          <div class="top-action-group">
+            <input class="top-search" id="globalSearch" placeholder="搜索会议，按 Enter 查看结果" />
+            <button class="icon-action" title="通知">◔</button>
+            <span class="operator-name" title="当前登录人">管理员 王忠</span>
+          </div>
+        </header>
+
+        <main class="workspace-card">
+          <div id="serviceBanner" class="service-banner" hidden></div>
+
+          <section id="page-records" class="page active">
+            <div id="meetingListView">
+              <div class="page-heading records-toolbar">
+                <div>
+                  <h2>会议列表</h2>
+                  <p>创建快速会议并开启实时转写；上传导入的音视频记录只在“导入转写”中展示。</p>
+                </div>
+                <div class="page-actions">
+                  <button class="primary-button" id="quickMeetingBtn">快速会议</button>
+                  <button class="secondary-button" id="batchExportBtn" disabled>批量导出</button>
+                </div>
+              </div>
+              <div id="recordsOverview" class="overview-strip hero-metrics"></div>
+              <div class="filter-bar">
+                <label>会议状态<select id="statusFilter"><option value="all">全部状态</option><option value="completed">已完成</option><option value="processing">处理中</option><option value="draft">草稿</option></select></label>
+                <label>纪要状态<select id="minutesFilter"><option value="all">全部纪要</option><option value="ready">可生成纪要</option><option value="generating">生成中</option><option value="generated">已生成</option></select></label>
+                <label>关键词库<select id="libraryFilter"><option value="all">全部词库</option></select></label>
+                <label>创建时间<input id="dateFilter" type="date" /></label>
+                <input id="recordSearch" class="search-input" placeholder="搜索会议主题、词库、创建人" />
+              </div>
+              <div class="iflytek-import-table meeting-list-table surface-panel">
+                <table class="records-table">
+                  <thead>
+                    <tr>
+                      <th><input type="checkbox" /></th>
+                      <th>序号</th>
+                      <th>会议主题</th>
+                      <th>时长</th>
+                      <th>创建时间</th>
+                      <th>会议状态</th>
+                      <th>纪要状态</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recordsTableBody"></tbody>
+                </table>
+                <footer class="pagination-bar"><span id="recordsTotal">共 0 条</span><button class="pager active">1</button><button class="pager">20 条/页</button></footer>
+              </div>
+            </div>
+          </section>
+
+          <section id="page-import" class="page">
+            <div id="importLedgerView">
+              <div class="page-heading">
+                <div>
+                  <h2>导入转写</h2>
+                  <p>导入音视频生成离线转写记录，处理完成后在台账中进入编辑详情。</p>
+                </div>
+                <div class="page-actions">
+                  <label class="secondary-button import-file-button" for="audioFileInput">选择音视频</label>
+                  <input id="audioFileInput" class="sr-only-input" type="file" multiple accept=".mp3,.wav,.pcm,.m4a,.amr,.wma,.aac,.mp4,.3gp" />
+                  <button class="primary-button" id="startImportBtn" type="button" disabled>开始转写</button>
+                  <input id="importSearchInput" class="search-input" placeholder="文件名称" />
+                </div>
+              </div>
+              <div class="import-settings-line">
+                <label>转写语言<select id="importLanguage"><option value="zh">中文普通话</option><option value="en">英文</option><option value="auto">中英混合</option></select></label>
+                <label>纪要模板<select id="importTemplateSelect"></select></label>
+                <label class="switch-line">声纹区分<input id="importDiarization" type="checkbox" checked /></label>
+                <label>声纹库<select id="importVoiceprintGroup"></select></label>
+                <div id="importHotwordPicker" class="tag-picker"></div>
+              </div>
+              <details class="import-advanced-settings">
+                <summary>更多识别设置</summary>
+                <div class="import-advanced-grid">
+                  <label>参会人<input id="importParticipants" placeholder="多人使用逗号分隔" /></label>
+                  <label>备注<input id="importNotes" placeholder="本批导入说明" /></label>
+                  <div class="full-width"><span>识别优化来源</span><div id="importOptimizationPicker" class="tag-picker optimization-picker"></div></div>
+                  <div class="full-width"><span>已确认文档词表</span><div id="importDocumentKeywordPicker" class="tag-picker"></div></div>
+                </div>
+              </details>
+              <div class="iflytek-import-table surface-panel">
+                <table class="records-table">
+                  <thead><tr><th><input type="checkbox" /></th><th>序号</th><th>文件名称</th><th>时长</th><th>创建时间</th><th>全部状态</th><th>操作</th></tr></thead>
+                  <tbody id="importFileList"></tbody>
+                </table>
+                <footer class="pagination-bar"><span id="importTotal">共0条记录</span><button class="pager active">1</button><button class="pager">20 条/页</button></footer>
+              </div>
+            </div>
+
+            <div id="importDetailView" hidden>
+              <div class="detail-head">
+                <div>
+                  <button class="secondary-button" id="backToImportLedgerBtn">返回台账</button>
+                  <h2 id="detailTitle">转写详情</h2>
+                  <p id="detailStatusStrip">等待会议数据</p>
+                </div>
+                <div class="download-wrap">
+                  <button class="primary-button detail-realtime-button" id="startRealtimeMeetingBtn" hidden>开始会议</button>
+                  <button class="danger-button" id="endMeetingBtn" hidden>结束会议</button>
+                  <button class="secondary-button" id="downloadToggleBtn">下载</button>
+                  <div id="downloadMenu" class="download-menu">
+                    <button data-download="transcript">下载转写记录</button>
+                    <button data-download="summary">下载 AI 摘要</button>
+                    <button data-download="audio">下载音频</button>
+                    <button data-download="minutes">下载会议纪要</button>
+                    <button data-download="highlight">下载标记结果</button>
+                  </div>
+                </div>
+              </div>
+              <div class="detail-workbench detail-ai-workbench">
+                <div class="speaker-panel" id="speakerPanel">
+                  <header>
+                    <div class="panel-title-line"><strong id="detailNavigationTitle">发言人列表</strong><span id="speakerCount">0人</span></div>
+                    <button class="panel-collapse-button panel-edge-toggle speaker-edge-toggle" type="button" data-detail-collapse="speaker" aria-label="收起发言人列表" title="收起发言人列表">‹</button>
+                  </header>
+                  <div class="panel-mode-tabs" aria-label="逐字稿导航方式"><button class="active" type="button" data-detail-navigation="speakers">发言人</button><button type="button" data-detail-navigation="chapters" title="按会议议题划分逐字稿并定位录音，不参与说话人识别">章节</button></div>
+                  <p id="navigationModeHint" class="navigation-mode-hint">按发言人筛选、定位和校正逐字稿。</p>
+                  <button class="speaker-row active" data-speaker="">不选择 <kbd>Ctrl+F1</kbd></button>
+                  <div id="speakerList"></div>
+                  <button class="add-speaker-btn" id="addSpeakerFromDetailBtn">＋ 添加发言人</button>
+                </div>
+                <section class="editor-panel editor-surface">
+                  <div id="transcriptWorkbenchBar" class="transcript-workbench-bar" aria-label="转写搜索与筛选" hidden>
+                    <input id="transcriptSearch" type="search" placeholder="搜索转写内容" aria-label="搜索转写内容" />
+                    <select id="transcriptSpeakerFilter" aria-label="按发言人筛选"><option value="">全部发言人</option></select>
+                  </div>
+                  <div class="rich-toolbar transcript-edit-toolbar">
+                    <!-- 样式控件只调整当前工作台显示，底层仍保存带时间轴的纯文本 segment。 -->
+                    <button id="editResultBtn" type="button">编辑结果</button>
+                    <button id="undoTranscriptBtn" class="toolbar-icon-button" type="button" disabled title="撤销本次逐字稿编辑" aria-label="撤销">↶</button>
+                    <button id="redoTranscriptBtn" class="toolbar-icon-button" type="button" disabled title="重做本次逐字稿编辑" aria-label="重做">↷</button>
+                    <select id="transcriptFontFamily" aria-label="逐字稿显示字体" title="只调整当前显示，不写入逐字稿">
+                      <option value="source-han">思源黑体</option><option value="system">系统字体</option><option value="serif">宋体</option>
+                    </select>
+                    <select id="transcriptFontSize" aria-label="逐字稿显示字号" title="只调整当前显示，不写入逐字稿">
+                      <option value="16">16px</option><option value="18" selected>18px</option><option value="20">20px</option><option value="22">22px</option>
+                    </select>
+                    <button type="button" data-transcript-style="bold" title="切换当前逐字稿显示粗体" aria-label="粗体"><strong>B</strong></button>
+                    <button type="button" data-transcript-style="italic" title="切换当前逐字稿显示斜体" aria-label="斜体"><em>I</em></button>
+                    <button type="button" data-transcript-style="underline" title="切换当前逐字稿显示下划线" aria-label="下划线"><u>U</u></button>
+                    <button type="button" data-transcript-style="strike" title="切换当前逐字稿显示删除线" aria-label="删除线"><s>S</s></button>
+                    <button type="button" data-transcript-style="color" title="切换当前逐字稿显示颜色" aria-label="文字颜色"><span class="toolbar-color-letter">A</span></button>
+                    <button type="button" data-transcript-style="align" title="切换左对齐、两端对齐和居中" aria-label="段落对齐">☰</button>
+                    <span id="transcriptSaveStatus" class="transcript-save-status">只读</span>
+                    <span class="transcript-toolbar-spacer"></span>
+                    <button id="cancelTranscriptEditBtn" type="button" hidden>取消</button>
+                    <button class="primary-button" id="saveTranscriptBtn" type="button" hidden disabled>保存修改</button>
+                  </div>
+                  <div id="transcriptEditor" class="transcript-editor"></div>
+                  <div id="bottomAudioPlayer" class="bottom-audio-player">
+                    <!-- A real media timeline backs source-reference seeks when the meeting has playable audio. -->
+                    <audio id="detailMediaElement" preload="metadata" aria-hidden="true"></audio>
+                    <button class="play-button" id="realtimePlayBtn" type="button">▶</button><button id="rewindAudioBtn" type="button" title="后退5秒">↶5</button><button id="forwardAudioBtn" type="button" title="前进5秒">5↷</button>
+                    <div class="waveform"></div><span id="audioClock">00:00:00/00:00:00</span><button id="playbackRateBtn" type="button" title="切换播放速度">1.0x</button>
+                  </div>
+                </section>
+                <aside class="right-tool-dock">
+                  <div class="tool-tab-bar">
+                    <button class="panel-collapse-button panel-edge-toggle tool-collapse-button tool-edge-toggle" type="button" data-detail-collapse="tools" aria-label="收起 AI 工具栏" title="收起 AI 工具栏">›</button>
+                    <button data-detail-tool="reorganize">规整</button>
+                    <button data-detail-tool="summary">摘要</button>
+                    <button data-detail-tool="minutes">纪要</button>
+                    <button data-detail-tool="todos">待办</button>
+                    <button data-detail-tool="mark">标记</button>
+                  </div>
+                  <section id="detailToolPanel" class="tool-result-panel"></section>
+                </aside>
+              </div>
+            </div>
+          </section>
+
+          <section id="page-voiceprints" class="page">
+            <div class="page-heading">
+              <div><h2>声纹库管理</h2><p>按分组管理发言人声纹模型，上传样本后可接 CAM++ 完成注册。</p></div>
+              <div class="page-actions"><input id="voiceprintSearch" class="search-input" placeholder="搜索内容" /><button class="primary-button" id="addVoiceprintBtn">导入声纹模型</button></div>
+            </div>
+            <div class="voiceprint-manager management-layout">
+              <aside class="group-sidebar"><h3>声纹库管理</h3><div id="voiceprintGroupList"></div><button id="addVoiceprintGroupBtn" class="secondary-button">＋ 新建群组</button></aside>
+              <section class="group-table">
+                <div class="table-actions"><label><input id="selectCurrentVoiceprints" type="checkbox" /> 当前页</label><button id="batchDeleteVoiceprintBtn" disabled>删除</button><button id="batchDownloadVoiceprintBtn" disabled>下载</button></div>
+                <table class="voiceprint-table"><thead><tr><th><input type="checkbox" /></th><th>姓名</th><th>部门</th><th>更新时间</th><th>所属分组</th><th>状态</th><th>操作</th></tr></thead><tbody id="voiceprintTableBody"></tbody></table>
+              </section>
+            </div>
+          </section>
+
+          <section id="page-hotwords" class="page">
+            <div class="optimization-shell management-layout">
+              <section class="optimization-main optimization-main-full">
+                <div class="optimization-tabs review-clean-tabs">
+                  <button class="active" data-opt-tab="manual">关键词手动优化</button>
+                  <button data-opt-tab="document">文档优化</button>
+                  <button data-opt-tab="smart">关键词智能优化</button>
+                  <button data-opt-tab="replacement">关键词强制替换</button>
+                </div>
+                <div id="manualKeywordsPanel" class="optimization-panel active">
+                  <div class="hint-panel">输入“智能转写”等关键词，系统将在后续识别过程中提升识别准确率。</div>
+                  <div class="segmented"><button class="active" data-language="zh">中文</button><button data-language="en">英文</button></div>
+                  <textarea id="manualKeywordsInput" maxlength="6000" placeholder="请输入需要优化的关键词，使用；号分隔"></textarea>
+                  <input id="manualKeywordsFileInput" class="sr-only-input" type="file" accept=".txt,.docx,.pptx" />
+                  <footer class="footer-action-pills"><button id="clearManualKeywordsBtn">清空关键词</button><button id="importManualKeywordsBtn">导入关键词</button><button id="downloadKeywordsWordBtn">下载Word</button><button class="primary-button" id="saveManualKeywordsBtn">保存并应用</button></footer>
+                </div>
+                <div id="documentKeywordsPanel" class="optimization-panel">
+                  <div class="hint-panel">上传文档，系统自动提取关键词，在后续识别过程中更准确。</div>
+                  <input id="optimizationDocumentInput" type="file" accept=".doc,.docx,.txt,.ppt,.pptx" />
+                  <button class="primary-button" id="uploadOptimizationDocumentBtn">添加并抽取</button>
+                  <button class="secondary-button" id="confirmDocumentKeywordsBtn" disabled>确认并加入可用词表</button>
+                  <div id="documentKeywordResult" class="empty-state">暂无文件，请点击按钮添加</div>
+                </div>
+                <div id="smartKeywordsPanel" class="optimization-panel">
+                  <div class="hint-panel">系统可从当前会议内容中自动推荐关键词，仅对中文生效。</div>
+                  <button class="primary-button" id="generateSmartKeywordsBtn">智能生成关键词</button>
+                  <button class="secondary-button" id="confirmSmartKeywordsBtn" disabled>确认并用于后续会议</button>
+                  <div id="smartKeywordResult" class="keyword-line"></div>
+                </div>
+                <div id="replacementRulesPanel" class="optimization-panel">
+                  <div class="hint-panel">输入替换词组，系统自动替换。例如“撰写→转写”。</div>
+                  <div class="replace-row"><input id="wrongWordInput" placeholder="错误词" /><span>»</span><input id="correctWordInput" placeholder="正确词" /><button class="primary-button" id="saveReplacementRuleBtn">保存并应用</button></div>
+                  <div id="replacementRuleList"></div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section id="page-sensitive" class="page">
+            <div class="forbidden-layout management-layout">
+              <section class="optimization-main optimization-main-full">
+                <div class="hint-panel">输入禁忌词，系统自动过滤。例如输入“世界最好”，屏蔽后的内容会按规则展示。</div>
+                <div id="sensitiveDisplayModes" class="display-mode-row sensitive-mode-panel">
+                  <span>禁忌词显示形式：</span>
+                  <label><input id="displayModeHide" name="displayMode" value="hide" type="radio" checked />不显示</label>
+                  <label><input id="displayModeSpace" name="displayMode" value="space" type="radio" />空格</label>
+                  <label><input id="displayModeStars" name="displayMode" value="stars" type="radio" />*</label>
+                  <label class="switch-line">区分英文大小写<input id="caseSensitiveToggle" type="checkbox" /></label>
+                </div>
+                <div class="display-mode-row sensitive-scope-panel" aria-label="禁忌词应用范围">
+                  <span>应用范围：</span>
+                  <label><input id="sensitiveScopeDisplay" type="checkbox" checked />逐字稿展示</label>
+                  <label><input id="sensitiveScopeAi" type="checkbox" />AI 分析</label>
+                  <label><input id="sensitiveScopeExport" type="checkbox" checked />导出文件</label>
+                </div>
+                <textarea id="forbiddenWordsInput" maxlength="6000" placeholder="输入需要屏蔽的禁忌词，并用；分隔"></textarea>
+                <input id="forbiddenWordsFileInput" class="sr-only-input" type="file" accept=".txt,.docx,.pptx" />
+                <footer class="footer-action-pills"><button id="clearForbiddenBtn">清空禁忌词</button><button id="importForbiddenBtn">导入禁忌词</button><button id="downloadForbiddenWordBtn">下载Word</button><button class="primary-button" id="saveForbiddenWordsBtn">保存并应用</button></footer>
+                <div id="sensitiveRuleList" class="rule-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <section id="page-templates" class="page">
+            <div class="template-toolbar management-layout">
+              <div class="template-tabs review-clean-tabs"><button class="active" data-template-source="my">我的模板</button><button data-template-source="system">系统模板</button></div>
+              <input id="templateSearch" class="search-input" placeholder="输入模板名称" />
+            </div>
+            <p class="muted">需对未设置的纪要模板进行标签设置，以保证 AI 生成内容的自动填充。</p>
+            <div id="templateGrid" class="template-grid">
+              <article id="importTemplateCard" class="template-card import-card"><span>＋</span><strong>导入模板</strong></article>
+            </div>
+          </section>
+
+          <section id="page-integration" class="page">
+            <div class="page-heading"><div><h2>系统对接</h2><p>对接普通会议系统的待办推送、纪要归档、文稿导出和音频回传。</p></div></div>
+            <div id="integrationStatusGrid" class="integration-grid management-layout"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <dialog id="createMeetingDialog" class="modal-dialog quick-meeting-dialog">
+      <form id="createMeetingForm">
+        <header class="quick-meeting-heading">
+          <div><h2>快速会议</h2><p>配置本次实时转写、发言人识别和会后纪要。</p></div>
+          <button class="modal-close" type="button" data-close-dialog="createMeetingDialog" aria-label="关闭快速会议弹窗">×</button>
+        </header>
+        <div class="quick-meeting-scroll-area">
+          <section class="quick-meeting-section">
+            <div class="quick-meeting-section-title"><strong>基本信息</strong><span>用于会议列表和纪要抬头</span></div>
+            <div class="form-grid">
+              <label class="full-width"><span class="form-field-title">会议主题 <span class="required">*</span></span><input id="createMeetingTitle" value="智能会议联调会" required /></label>
+              <label><span class="form-field-title">参会人</span><input id="createParticipants" placeholder="输入姓名，多个用逗号分隔" /></label>
+              <label><span class="form-field-title">会议地点</span><input id="createMeetingLocation" placeholder="请输入会议地点" /></label>
+            </div>
+          </section>
+
+          <section class="quick-meeting-section">
+            <div class="quick-meeting-section-title"><strong>识别设置</strong><span>开始会议后冻结，不受后续全局配置变化影响</span></div>
+            <div class="quick-meeting-switches">
+              <label class="switch-card"><span><strong>会议转写</strong><small>实时生成带时间戳的逐字稿</small></span><input id="createTranscriptionEnabled" type="checkbox" checked /></label>
+              <label class="switch-card"><span><strong>声纹区分</strong><small>区分不同发言人并匹配声纹库</small></span><input id="createDiarization" type="checkbox" checked /></label>
+            </div>
+            <div class="form-grid quick-meeting-recognition-grid">
+              <label><span class="form-field-title">输入音源</span><select id="createAudioSource"><option>麦克风阵列</option><option>系统音频</option></select></label>
+              <label><span class="form-field-title">识别语言</span><select id="createLanguage"><option value="zh">中文普通话</option><option value="en">英文</option><option value="auto">中英混合</option></select></label>
+              <label><span class="form-field-title">识别优化模式</span><select id="createOptimizationMode"><option value="auto">自动应用识别优化</option><option value="manual">仅手动关键词</option><option value="document">文档关键词优先</option><option value="replacement">强制替换优先</option><option value="off">不使用优化</option></select></label>
+              <label><span class="form-field-title">声纹库</span><select id="createVoiceprintLibrary"><option>默认声纹库</option><option>暂不指定</option></select></label>
+            </div>
+            <div id="createOptimizationPicker" class="tag-picker optimization-picker" aria-label="本次会议识别优化来源"></div>
+            <div class="dialog-subsection"><strong>已确认文档词表</strong><span>仅已确认词表会进入识别</span><div id="createDocumentKeywordPicker" class="tag-picker"></div></div>
+          </section>
+
+          <section class="quick-meeting-section">
+            <div class="quick-meeting-section-title"><strong>纪要与附件</strong><span>附件将随会议保存，不作为转写音频</span></div>
+            <div class="form-grid">
+              <label class="full-width"><span class="form-field-title">纪要模板</span><select id="createTemplate"></select></label>
+              <label class="full-width"><span class="form-field-title">附件</span>
+                <span class="custom-file-picker">
+                  <span class="secondary-button">选择附件</span>
+                  <span id="createMeetingAttachmentName">未选择文件</span>
+                  <button id="clearCreateMeetingAttachmentBtn" type="button" hidden>移除</button>
+                </span>
+                <input id="createMeetingAttachment" class="sr-only-input" type="file" />
+              </label>
+              <label class="full-width"><span class="form-field-title">备注</span><textarea id="createMeetingNotes" placeholder="补充会议背景、目标或其他说明"></textarea></label>
+            </div>
+          </section>
+        </div>
+        <footer class="quick-meeting-footer"><span>创建后可在详情页开始、暂停和结束会议</span><div><button type="button" data-close-dialog="createMeetingDialog">取消</button><button class="primary-button" id="startMeetingBtn">创建并开始</button></div></footer>
+      </form>
+    </dialog>
+
+    <dialog id="speakerRenameDialog" class="modal-dialog speaker-rename-dialog">
+      <form id="speakerRenameForm">
+        <button class="modal-close" type="button" data-close-dialog="speakerRenameDialog">×</button>
+        <h2>修改发言人</h2>
+        <input id="speakerRenameOldName" type="hidden" />
+        <div class="entity-dialog-grid">
+          <label>原发言人<input id="speakerRenameOriginal" disabled /></label>
+          <label>姓名<input id="speakerRenameName" required /></label>
+          <label>部门/职位<input id="speakerRenameTitle" /></label>
+        </div>
+        <p class="modal-hint">保存后会同步当前会议中该发言人的所有转写片段。</p>
+        <footer><button type="button" data-close-dialog="speakerRenameDialog">取消</button><button class="primary-button" type="submit">保存修改</button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="voiceprintGroupDialog" class="modal-dialog compact-form-dialog">
+      <form id="voiceprintGroupForm">
+        <button class="modal-close" type="button" data-close-dialog="voiceprintGroupDialog" aria-label="关闭声纹分组窗口">×</button>
+        <h2 id="voiceprintGroupDialogTitle">新建声纹分组</h2>
+        <div class="entity-dialog-grid">
+          <label class="full-width">分组名称<span class="required">*</span><input id="voiceprintGroupName" maxlength="40" required placeholder="请输入分组名称" /></label>
+          <label class="full-width">分组说明<textarea id="voiceprintGroupDescription" maxlength="200" placeholder="说明该分组适用的部门或会议场景"></textarea></label>
+        </div>
+        <p class="modal-hint">“全部”和“未分组”是系统分组，名称和语义保持固定。</p>
+        <footer>
+          <button id="deleteVoiceprintGroupBtn" class="danger-ghost-button" type="button" hidden>删除分组</button>
+          <span class="dialog-footer-spacer"></span>
+          <button class="secondary-button" type="button" data-close-dialog="voiceprintGroupDialog">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="entityDialog" class="modal-dialog">
+      <form id="entityForm">
+        <button class="modal-close" type="button" data-close-dialog="entityDialog">×</button>
+        <h2 id="entityDialogTitle">编辑</h2>
+        <div id="entityFormFields"></div>
+        <footer><button type="button" data-close-dialog="entityDialog">取消</button><button class="primary-button" type="submit">保存</button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="templateImportDialog" class="modal-dialog template-import-dialog">
+      <form id="templateImportForm">
+        <button class="modal-close" type="button" data-close-dialog="templateImportDialog">×</button>
+        <header class="template-designer-head">
+          <div>
+            <h2>导入并识别纪要模板</h2>
+            <p>上传本地 docx/txt/pptx 模板，系统会抽取文本并配置自动填充标签。</p>
+          </div>
+          <span class="template-status" id="templateParseStatus">未上传</span>
+        </header>
+        <div class="template-designer">
+          <aside class="template-tag-panel">
+            <label>模板文件<input id="templateFileInput" type="file" accept=".doc,.docx,.txt,.ppt,.pptx" /></label>
+            <label>模板名称<input id="templateImportName" placeholder="例如：企业会议纪要模板" /></label>
+            <label>模板类型<input id="templateImportType" value="自定义会议" /></label>
+            <p class="muted">拖动或点击下方文本标签，将语音识别和 AI 纪要结果自动填入模板对应区域。</p>
+            <div id="templateTagEditor" class="template-tag-palette"></div>
+            <label class="switch-line">设为默认模板<input id="templateImportDefault" type="checkbox" /></label>
+          </aside>
+          <section class="template-preview-paper">
+            <h3 id="templateImportPreviewTitle">模板预览</h3>
+            <div id="templateImportPreviewBody" class="template-paper-body">请选择本地模板文件。</div>
+          </section>
+        </div>
+        <footer><button type="button" data-close-dialog="templateImportDialog">取消</button><button type="button" id="parseTemplateFileBtn">识别模板</button><button class="primary-button" id="saveImportedTemplateBtn" type="button">保存</button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="templatePreviewDialog" class="modal-dialog template-preview-dialog">
+      <button class="modal-close" type="button" data-close-dialog="templatePreviewDialog">×</button>
+      <h2 id="templatePreviewModalTitle">模板预览</h2>
+      <div id="templatePreviewModalBody" class="template-preview-modal-body"></div>
+    </dialog>
+
+    <dialog id="confirmActionDialog" class="modal-dialog">
+      <div class="confirm-action-dialog">
+        <h2 id="confirmActionTitle">确认删除</h2>
+        <p id="confirmActionDescription" class="modal-hint"></p>
+        <footer><button type="button" data-close-dialog="confirmActionDialog">取消</button><button class="danger-button" id="confirmActionConfirmBtn" type="button">删除</button></footer>
+      </div>
+    </dialog>
+
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <!-- Realtime transcription bugs are mostly fixed in app.js; keep a versioned URL so the browser
+      reloads the latest capture/status logic instead of silently reusing an old cached script. -->
+    <!-- 本次版本包含实时断句与短句声纹稳定性修复；更新查询串可确保已打开页面不复用旧缓存。 -->
+    <script src="./app.js?v=meeting-layout-20260716b"></script>
+  </body>
+</html>
