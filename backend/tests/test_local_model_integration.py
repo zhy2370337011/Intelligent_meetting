@@ -82,6 +82,47 @@ class _FakeHttpErrorResponse:
 
 
 class LocalModelIntegrationTest(unittest.TestCase):
+    def test_real_diarization_normalizes_imported_mp3_before_model_inference(self):
+        """导入 MP3 必须先转为 16k 单声道 WAV，不能在 ``wave.open`` 阶段静默失去发言人。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "meeting.mp3"
+            source_path.write_bytes(b"ID3\x04\x00\x00fake-mp3")
+            model_inputs: list[Path] = []
+            converted_paths: list[Path] = []
+
+            def fake_ffmpeg(command, **kwargs):
+                """只创建命令指定的单个 WAV，模拟 ffmpeg 成功，不依赖测试机编解码器。"""
+
+                output_path = Path(command[-1])
+                converted_paths.append(output_path)
+                with wave.open(str(output_path), "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(16000)
+                    wav_file.writeframes(b"\x00\x00" * 16000)
+
+            def fake_model(audio_path, **kwargs):
+                model_inputs.append(Path(audio_path))
+                return {"text": [[0.0, 0.5, 0], [0.5, 1.0, 1]]}
+
+            with (
+                patch.object(model_api, "LOCAL_MODEL_MOCK_MODE", False),
+                patch.object(model_api, "DIARIZATION_BACKEND_URL", ""),
+                patch.object(model_api, "MODEL_SERVICE_DATA_DIR", Path(temp_dir)),
+                patch.object(model_api, "_get_diarization_model", return_value=fake_model),
+                patch.object(model_api.shutil, "which", return_value="ffmpeg"),
+                patch.object(model_api.subprocess, "run", side_effect=fake_ffmpeg),
+            ):
+                result = model_api.diarize(model_api.DiarizeRequest(audio_path=str(source_path)))
+
+            self.assertEqual([item["speaker"] for item in result["segments"]], ["SPEAKER_00", "SPEAKER_01"])
+            self.assertEqual(len(model_inputs), 1)
+            self.assertEqual(model_inputs[0].suffix.lower(), ".wav")
+            self.assertNotEqual(model_inputs[0], source_path)
+            self.assertEqual(len(converted_paths), 1)
+            self.assertFalse(converted_paths[0].exists(), "请求生成的临时 WAV 应按精确路径清理")
+
     def test_request_json_preserves_dashscope_http_error_body(self):
         """DashScope 返回 400 时必须保留响应体，方便前端兜底提示和后端日志定位真实原因。"""
 

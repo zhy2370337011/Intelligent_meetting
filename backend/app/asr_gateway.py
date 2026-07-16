@@ -368,6 +368,10 @@ class DashScopeAsrGateway(MockQwenAsrGateway):
                 "rawText": raw_text,
                 "language": language,
                 "words": mock_align_text(safe_text, start_ms=start_ms),
+                # 当前同步 Qwen3-ASR 接口只返回正文，不返回真实字级时间戳；该标记告诉会后
+                # 说话人切分逻辑按整个 ASR/VAD 窗口等比分配文字，不能把 240ms mock 游标
+                # 误当成模型强制对齐结果。后续接入真实对齐数据时不设置此标记即可原样使用。
+                "wordTimestampsEstimated": True,
             }
         ]
 

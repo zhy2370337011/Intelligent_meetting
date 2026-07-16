@@ -1782,6 +1782,54 @@ class ApiContractTest(unittest.TestCase):
             ["diarization-SPEAKER_00", "diarization-SPEAKER_01"],
         )
 
+    def test_long_import_asr_segment_is_split_at_diarization_speaker_changes(self):
+        """一个 30 秒 ASR 文本段内的多人轮流发言必须拆回独立底层 segment。
+
+        这是导入转写区别不了发言人的核心回归：旧逻辑只给整个长段选择重叠最多的一位，
+        即使 3D-Speaker 已返回两人也会全部显示成发言人1。测试同时锁定原始来源 ID、
+        字词时间戳和文字总量，避免修复说话人时破坏编辑、来源跳转或 ASR 原文。
+        """
+
+        original_text = "甲方 发言，乙方 回应。"
+        word_characters = [char for char in original_text if not char.isspace()]
+        segment = {
+            "id": "seg-import-long",
+            "speakerName": "待匹配发言人",
+            "startMs": 0,
+            "endMs": 12000,
+            "text": original_text,
+            "rawText": original_text,
+            "wordTimestampsEstimated": True,
+            "words": [
+                {"text": char, "start_ms": index * 240, "end_ms": (index + 1) * 240}
+                for index, char in enumerate(word_characters)
+            ],
+        }
+        diarization_segments = [
+            {"speaker": "SPEAKER_00", "start_ms": 0, "end_ms": 6000},
+            {"speaker": "SPEAKER_01", "start_ms": 6000, "end_ms": 12000},
+        ]
+
+        split = main_module.split_asr_segments_by_diarization([segment], diarization_segments)
+        patched = apply_voiceprint_match_to_segments(split, "", {"segments": diarization_segments})
+
+        self.assertEqual([item["speakerName"] for item in patched], ["发言人1", "发言人2"])
+        self.assertEqual([item["sourceSegmentId"] for item in patched], ["seg-import-long", "seg-import-long"])
+        self.assertEqual("".join(item["rawText"] for item in patched), segment["rawText"])
+        self.assertEqual([item["id"] for item in patched], ["seg-import-long-speaker-1", "seg-import-long-speaker-2"])
+        self.assertLessEqual(patched[0]["endMs"], patched[1]["startMs"])
+
+    def test_import_diarization_without_word_timestamps_keeps_legacy_segment(self):
+        """旧 ASR 适配器没有 words 时必须保持原段，不能为识别人而丢正文。"""
+
+        original = {"id": "legacy", "startMs": 0, "endMs": 5000, "text": "保留旧文本"}
+        split = main_module.split_asr_segments_by_diarization(
+            [original],
+            [{"speaker": "SPEAKER_00", "start_ms": 0, "end_ms": 5000}],
+        )
+
+        self.assertEqual(split, [original])
+
     def test_five_ai_workflow_buttons_and_docx_export_are_frontend_ready(self):
         """前端右侧会议工具只保留规整、摘要、纪要、待办和标记相关能力。
 

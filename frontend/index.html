@@ -187,8 +187,10 @@
                   </div>
                 </section>
                 <aside class="right-tool-dock">
+                  <!-- 收起按钮必须是面板直属元素，不能放在会被隐藏/横向裁切的工具标签容器里；
+                       收起到 56px 后它仍是稳定、可聚焦的展开入口。 -->
+                  <button class="panel-collapse-button panel-edge-toggle tool-collapse-button tool-edge-toggle" type="button" data-detail-collapse="tools" aria-label="收起 AI 工具栏" title="收起 AI 工具栏">›</button>
                   <div class="tool-tab-bar">
-                    <button class="panel-collapse-button panel-edge-toggle tool-collapse-button tool-edge-toggle" type="button" data-detail-collapse="tools" aria-label="收起 AI 工具栏" title="收起 AI 工具栏">›</button>
                     <button data-detail-tool="reorganize">规整</button>
                     <button data-detail-tool="summary">摘要</button>
                     <button data-detail-tool="minutes">纪要</button>

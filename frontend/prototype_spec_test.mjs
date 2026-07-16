@@ -266,7 +266,15 @@ assert.ok(css.includes(".detail-workbench.tools-collapsed"), "详情工作台必
 assert.ok(css.includes("minmax(196px, 220px)") && css.includes("minmax(500px, 600px)"), "发言人栏必须保持紧凑，右侧 AI 工具栏必须获得足够的编辑和结果展示空间");
 assert.ok(css.includes(".panel-edge-toggle"), "左右栏收起按钮必须做成边缘浮动控件，避免藏在面板内容里看不见");
 assert.ok(!css.includes("right: -17px") && !css.includes("left: -17px"), "左右栏收起按钮不能用负偏移导致按钮被相邻面板或 overflow 裁切");
+assert.ok(css.includes(".speaker-panel.is-collapsed .panel-mode-tabs") && css.includes(".speaker-panel.is-collapsed .navigation-mode-hint"), "左栏收起时必须隐藏发言人/章节切换和说明，不能在窄轨道里残留截断文字");
+assert.match(html, /<aside class="right-tool-dock">\s*<!-- 收起按钮必须是面板直属元素/, "右栏展开按钮必须位于工具标签栏之外，收起后仍可操作");
+assert.ok(css.includes(".right-tool-dock.is-collapsed > .tool-edge-toggle"), "右栏收起后必须显式保留直属展开按钮");
 assert.ok(css.includes("flex-wrap: nowrap") && css.includes(".rich-toolbar"), "转写编辑工具栏必须保持单行排布，不能把菜单按钮挤到第二行");
+
+// 媒体刚加载会在 00:00 触发浏览器事件，但不能伪装成用户正在播放第一段。
+assert.ok(js.includes("playbackInteractionStarted"), "逐字稿高亮必须区分浏览器初始化与用户真实播放/跳转");
+assert.ok(js.includes("state.playbackInteractionStarted = true") && js.includes("state.playbackInteractionStarted = false"), "播放交互状态必须在操作后开启、切换录音后重置");
+assert.ok(css.includes(".speech-block-paragraph.is-active") && !css.includes(".speech-segment.is-active {"), "块级活动样式不能泄漏到合并正文的行内片段");
 
 // 右侧五个 AI 工具按钮需要在请求期间出现明确运行态，避免用户误判为点击无效。
 assert.ok(js.includes("runningDetailTool"), "AI 工具按钮必须记录当前运行中的工具");
@@ -421,7 +429,7 @@ assert.deepEqual(detailToolButtons.map((match) => match[1]), ["reorganize", "sum
 const laterToolTabRules = [...css.slice(stableToolTabRule).matchAll(/\.right-tool-dock \.tool-tab-bar\s*\{([^}]*)\}/g)];
 assert.ok(!laterToolTabRules.some((match) => /display:\s*flex|flex-wrap:\s*wrap/.test(match[1])), "五列工具栏后续级联不能重新退化成可换行 flex");
 assert.ok(js.includes('$("transcriptSearch")?.addEventListener("input"') && js.includes('$("transcriptSpeakerFilter")?.addEventListener("change"'), "中文搜索与发言人筛选必须保留交互事件绑定");
-assert.ok(css.includes(".management-layout") && css.includes(".artifact-stale-banner") && css.includes(".speech-segment.is-active"), "产品样式必须覆盖管理布局、过期提示和播放中的片段");
+assert.ok(css.includes(".management-layout") && css.includes(".artifact-stale-banner") && css.includes(".speech-block-paragraph.is-active") && css.includes(".merged-segment-fragment.is-active"), "产品样式必须覆盖管理布局、过期提示和两种逐字稿播放高亮");
 
 assert.ok(js.includes("loadModelServicesInBackground"), "模型服务健康探测必须后台加载，不能阻塞会议列表和其他核心业务数据的首屏渲染");
 

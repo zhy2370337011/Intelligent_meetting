@@ -110,15 +110,38 @@ function inspectLayoutExpression() {
   // only reports intersections between independent visible controls/text nodes so it flags real UI
   // collisions without treating normal composition as an error.
   return `(() => {
+    const clippedRect = (node) => {
+      const raw = node.getBoundingClientRect();
+      let left = raw.left;
+      let right = raw.right;
+      let top = raw.top;
+      let bottom = raw.bottom;
+      // getBoundingClientRect 返回元素裁切前的布局框。逐字稿筛选框位于 overflow:hidden
+      // 的中栏内，超出部分肉眼不可见；若不与每个裁剪祖先求交，审计会把不可见区域
+      // 与相邻右栏按钮误报成“可见重叠”。auto/scroll 容器同样只审计当前视口。
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        const rect = parent.getBoundingClientRect();
+        if (['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX)) {
+          left = Math.max(left, rect.left);
+          right = Math.min(right, rect.right);
+        }
+        if (['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY)) {
+          top = Math.max(top, rect.top);
+          bottom = Math.min(bottom, rect.bottom);
+        }
+      }
+      return { left, right, top, bottom, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+    };
     const visible = (node) => {
       const style = getComputedStyle(node);
-      const rect = node.getBoundingClientRect();
+      const rect = clippedRect(node);
       return style.visibility !== "hidden" && style.display !== "none" && !node.classList.contains("sr-only-input") && rect.width > 4 && rect.height > 4;
     };
     const elements = [...document.querySelectorAll("button,input,select,textarea,[role=button],h1,h2,h3,h4,p,strong")]
       .filter(visible)
       .map((node, index) => {
-        const rect = node.getBoundingClientRect();
+        const rect = clippedRect(node);
         return { node, index, tag: node.tagName, id: node.id, text: (node.innerText || node.getAttribute("aria-label") || "").trim().slice(0, 48), rect };
       });
     const overlaps = [];
@@ -290,6 +313,8 @@ async function auditMeetingDetail(session, viewport) {
       mergedParagraphCount: mergedParagraphs.length,
       mergedParagraphsWithNestedRows: mergedParagraphs.filter((node) => node.querySelector('.speech-block-paragraph')).length,
       sourceMarkerCount: sourceMarkers.length,
+      // 页面刚打开且播放器尚未播放时不应高亮 00:00 的第一段；这正是截图中绿色异形块的根因。
+      activeSegmentCount: document.querySelectorAll('.speech-segment.is-active').length,
       editorWidth: editorRect?.width || 0,
       toolWidth: toolRect?.width || 0,
       allStyleButtonsVisible: Boolean(lastStyleRect && toolbarRect && lastStyleRect.right <= toolbarRect.right + 1),
@@ -301,6 +326,7 @@ async function auditMeetingDetail(session, viewport) {
   assert.ok(detail.segmentCount > 0, `${viewport.name}: fixture meeting did not render transcript segments`);
   assert.ok(detail.mergedParagraphCount > 0, `${viewport.name}: read-only transcript did not render merged speaker paragraphs`);
   assert.equal(detail.mergedParagraphsWithNestedRows, 0, `${viewport.name}: merged speaker paragraph still contains separated internal rows`);
+  assert.equal(detail.activeSegmentCount, 0, `${viewport.name}: transcript highlighted 00:00 before any playback/source interaction`);
   if (viewport.name === "desktop-1600x1000") {
     assert.ok(detail.toolWidth >= 490, `AI rail is still too narrow on desktop: ${detail.toolWidth}px`);
     assert.equal(
@@ -310,6 +336,48 @@ async function auditMeetingDetail(session, viewport) {
     );
   }
   assert.equal(detail.realtimePlayerVisible, true, `${viewport.name}: realtime detail lost its media controls`);
+
+  if (!viewport.mobile) {
+    // 左右栏都要真实完成“收起 -> 只剩展开入口 -> 再展开”。仅检查 class 存在无法发现
+    // 截图中的残留“章节”文字和右侧按钮被工具栏 overflow 裁掉的问题。
+    const collapseState = await session.evaluate(`(() => {
+      const visible = (node) => {
+        if (!node) return false;
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 4 && rect.height > 4;
+      };
+      const speakerToggle = document.querySelector('[data-detail-collapse="speaker"]');
+      const toolsToggle = document.querySelector('[data-detail-collapse="tools"]');
+      speakerToggle.click();
+      const speakerCollapsed = {
+        workbenchClass: document.querySelector('.detail-workbench').classList.contains('speaker-collapsed'),
+        tabsVisible: visible(document.querySelector('.speaker-panel .panel-mode-tabs')),
+        hintVisible: visible(document.querySelector('.speaker-panel .navigation-mode-hint')),
+        toggleVisible: visible(speakerToggle),
+      };
+      speakerToggle.click();
+      toolsToggle.click();
+      const toolsCollapsed = {
+        workbenchClass: document.querySelector('.detail-workbench').classList.contains('tools-collapsed'),
+        tabsVisible: visible(document.querySelector('.right-tool-dock .tool-tab-bar')),
+        toggleVisible: visible(toolsToggle),
+      };
+      toolsToggle.click();
+      return {
+        speakerCollapsed,
+        toolsCollapsed,
+        speakerExpanded: !document.querySelector('.detail-workbench').classList.contains('speaker-collapsed'),
+        toolsExpanded: !document.querySelector('.detail-workbench').classList.contains('tools-collapsed'),
+        toolTabsRestored: visible(document.querySelector('.right-tool-dock .tool-tab-bar')),
+      };
+    })()`);
+    assert.deepEqual(collapseState.speakerCollapsed, { workbenchClass: true, tabsVisible: false, hintVisible: false, toggleVisible: true }, `${viewport.name}: left rail collapse is incomplete`);
+    assert.deepEqual(collapseState.toolsCollapsed, { workbenchClass: true, tabsVisible: false, toggleVisible: true }, `${viewport.name}: right rail collapse lost its expand entry`);
+    assert.equal(collapseState.speakerExpanded, true, `${viewport.name}: left rail did not expand again`);
+    assert.equal(collapseState.toolsExpanded, true, `${viewport.name}: right rail did not expand again`);
+    assert.equal(collapseState.toolTabsRestored, true, `${viewport.name}: right tool tabs did not restore after expand`);
+  }
 
   // A populated transcript alone does not prove provenance is usable. Generate one real derived
   // artifact through the visible tool, wait for its canonical source buttons, then follow a source

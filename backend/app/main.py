@@ -1559,6 +1559,21 @@ def _first_voiceprint_match(payload: dict[str, Any] | None) -> dict[str, Any] | 
     return None
 
 
+def _voiceprint_match_for_tracker(candidate: dict[str, Any] | None) -> dict[str, Any] | None:
+    """只在 tracker 边界把业务声纹分数字段转换为其输入契约。
+
+    segment 和 API 历史上使用 ``voiceprintConfidence``，RealtimeSpeakerTracker 使用
+    ``confidence``。转换副本可让可信姓名在实时/导入两条链路生效，同时不向持久化
+    segment 新增一个含义重复的通用字段，避免破坏既有前端和导出契约。
+    """
+
+    if not candidate:
+        return None
+    tracker_candidate = dict(candidate)
+    tracker_candidate["confidence"] = float(candidate.get("voiceprintConfidence") or 0)
+    return tracker_candidate
+
+
 def match_voiceprint_for_audio(audio_path: str) -> dict[str, Any] | None:
     """把一段音频提交给本地声纹服务，返回最匹配的已注册人员。
 
@@ -1610,7 +1625,7 @@ def _analyze_realtime_speaker_wav(wav_bytes: bytes) -> tuple[list[float] | None,
             matched = _first_voiceprint_match(client.match(audio_path=audio_path, top_k=10))
         except Exception:
             matched = None
-        return embedding, matched
+        return embedding, _voiceprint_match_for_tracker(matched)
     finally:
         Path(audio_path).unlink(missing_ok=True)
 
@@ -1693,14 +1708,16 @@ def _audio_window_for_voiceprint(audio_path: str, start_ms: int, end_ms: int) ->
         raise
 
 
-def _build_diarization_voiceprint_map(
+def _build_diarization_identity_map(
     diarization_segments: list[dict[str, Any]],
     audio_path: str,
 ) -> dict[str, dict[str, Any]]:
-    """按 diarization speaker key 尝试匹配声纹库人员。
+    """把离线 diarization 的 speaker key 映射到实时链路同款会议内身份。
 
-    为了避免“一段整场音频 top1 把所有人都覆盖成同一个姓名”，这里按 speaker key 选最长的代表片段
-    单独匹配。低置信度兜底命中只允许使用一次，防止多发言人会议被同一个单人兜底全部吞掉。
+    每个 3D-Speaker key 只取最长代表窗口提取一次 CAM++ embedding，既避免长会议按每句话
+    重复推理，又复用实时会议已经校准的 0.58 聚类阈值。这样同一个人被 diarization 临时拆成
+    两个 key 时仍能合并，真正不同的人则获得稳定的 speaker-1/2；原始 embedding 只留在本函数
+    tracker 内存中，返回值只包含可持久化身份字段。
     """
 
     if not audio_path or not VOICEPRINT_GATEWAY_BASE_URL:
@@ -1723,29 +1740,182 @@ def _build_diarization_voiceprint_map(
             representatives[key] = item
 
     mapped: dict[str, dict[str, Any]] = {}
-    used_voiceprint_ids: set[str] = set()
+    tracker = RealtimeSpeakerTracker(cluster_threshold=REALTIME_FINAL_SEGMENT_CLUSTER_COSINE_THRESHOLD)
+    client = LocalVoiceprintClient(VOICEPRINT_GATEWAY_BASE_URL)
     for key, item in representatives.items():
         start_ms = int(item.get("startMs") or item.get("start_ms") or 0)
         end_ms = int(item.get("endMs") or item.get("end_ms") or start_ms)
         clip_path = ""
+        embedding: list[float] | None = None
+        matched: dict[str, Any] | None = None
         try:
             clip_path = _audio_window_for_voiceprint(audio_path, start_ms, end_ms)
-            matched = match_voiceprint_for_audio(clip_path)
+            try:
+                embedding_payload = client.embedding(audio_path=clip_path)
+                embedding = list(embedding_payload.get("embedding") or []) or None
+            except Exception:
+                # embedding 与姓名匹配是两项独立能力；任一失败都不能阻断另一项或 ASR 文本。
+                embedding = None
+            try:
+                matched = _first_voiceprint_match(client.match(audio_path=clip_path, top_k=10))
+            except Exception:
+                matched = None
         except Exception:
+            embedding = None
             matched = None
         finally:
             if clip_path:
                 Path(clip_path).unlink(missing_ok=True)
-        if not matched:
+        if embedding is None and not matched:
             continue
-        voiceprint_id = matched.get("voiceprintId", "")
-        confidence = float(matched.get("voiceprintConfidence") or 0)
-        if voiceprint_id and voiceprint_id in used_voiceprint_ids and confidence < 0.85:
+        identity = tracker.identify(embedding, _voiceprint_match_for_tracker(matched))
+        # 无 embedding 时 tracker 的普通 fallback 不能证明两段属于同一人；只有可信声纹姓名
+        # 才允许写回。其余情况保留 diarization 自己的 key，避免多人被武断合并。
+        if embedding is None and identity.speaker_source != "voiceprint":
             continue
-        if voiceprint_id:
-            used_voiceprint_ids.add(voiceprint_id)
-        mapped[key] = matched
+        mapped[key] = _speaker_identity_event_fields(identity)
     return mapped
+
+
+def _word_time_range(
+    word: dict[str, Any],
+    segment: dict[str, Any],
+    index: int,
+    total: int,
+) -> tuple[int, int, dict[str, Any]]:
+    """取得一个 ASR 字/词的可靠时间范围，并返回不会修改原对象的副本。"""
+
+    copied = dict(word)
+    segment_start = int(segment.get("startMs") or segment.get("start_ms") or 0)
+    segment_end = int(segment.get("endMs") or segment.get("end_ms") or segment_start)
+    if segment.get("wordTimestampsEstimated") and segment_end > segment_start and total > 0:
+        # 同步 Qwen3-ASR 暂无真实字级时间戳。按完整 VAD/ASR 窗口等比分布，比旧的固定
+        # 240ms 游标更接近真实发言顺序，并明确保留 estimated 标记供后续强制对齐替换。
+        duration = segment_end - segment_start
+        start_ms = segment_start + int(round(duration * index / total))
+        end_ms = segment_start + int(round(duration * (index + 1) / total))
+        copied["start_ms"] = start_ms
+        copied["end_ms"] = max(start_ms + 1, end_ms)
+        return start_ms, max(start_ms + 1, end_ms), copied
+    start_ms = int(word.get("startMs") or word.get("start_ms") or segment_start)
+    end_ms = int(word.get("endMs") or word.get("end_ms") or start_ms)
+    return start_ms, max(start_ms + 1, end_ms), copied
+
+
+def _best_diarization_segment_for_range(
+    start_ms: int,
+    end_ms: int,
+    diarization_segments: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """按最大重叠选择说话人；停顿缝隙中的标点使用时间上最近的 speaker。"""
+
+    probe = {"startMs": start_ms, "endMs": end_ms}
+    best = max(diarization_segments, key=lambda item: _segment_overlap_ms(probe, item), default=None)
+    if best and _segment_overlap_ms(probe, best) > 0:
+        return best
+    if not diarization_segments:
+        return None
+    midpoint = (start_ms + end_ms) / 2
+
+    def distance(item: dict[str, Any]) -> float:
+        item_start = int(item.get("startMs") or item.get("start_ms") or 0)
+        item_end = int(item.get("endMs") or item.get("end_ms") or item_start)
+        if item_start <= midpoint <= item_end:
+            return 0
+        return min(abs(midpoint - item_start), abs(midpoint - item_end))
+
+    return min(diarization_segments, key=distance)
+
+
+def _source_text_fragments_for_words(
+    segment: dict[str, Any],
+    words: list[dict[str, Any]],
+) -> list[str]:
+    """把 provider 原文中的空格/标点按顺序附着到 words，保证拆段后可精确拼回原文。
+
+    mock/部分云端字级结果会跳过空格，而 ``segment.rawText`` 仍包含原始排版。仅拼接
+    ``word.text`` 会把英文 ``project plan`` 变成 ``projectplan``。这里按游标顺序在原文
+    中查找每个 token，并把 token 前的间隔字符一并归给当前 token；最后一个 token 再
+    接收尾部字符。若 provider token 与原文无法顺序匹配，则安全回退到 token 自身，
+    不做可能错位的模糊替换。
+    """
+
+    source_text = str(segment.get("rawText") or segment.get("text") or "")
+    if not words:
+        return []
+    fragments: list[str] = []
+    cursor = 0
+    for word in words:
+        token = str(word.get("text") or "")
+        position = source_text.find(token, cursor) if token else cursor
+        if position < 0:
+            return [str(item.get("text") or "") for item in words]
+        token_end = position + len(token)
+        fragments.append(source_text[cursor:token_end])
+        cursor = token_end
+    fragments[-1] += source_text[cursor:]
+    return fragments
+
+
+def split_asr_segments_by_diarization(
+    segments: list[dict[str, Any]],
+    diarization_segments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """按字/词时间戳把一个长 ASR 段切成连续单一说话人片段。
+
+    只在存在时间戳和有效 diarization 时切分；没有字级数据的旧适配器继续走原来的整段
+    最大重叠兼容逻辑。新 ID 由原 segment ID 和组序号稳定派生，同时保留 sourceSegmentId，
+    因而逐字稿编辑、AI 来源、敏感词和导出仍能追溯到原始 ASR 段。
+    """
+
+    if not diarization_segments:
+        return [dict(segment) for segment in segments]
+    output: list[dict[str, Any]] = []
+    for segment in segments:
+        words = [dict(word) for word in (segment.get("words") or []) if isinstance(word, dict)]
+        if not words:
+            output.append(dict(segment))
+            continue
+        source_fragments = _source_text_fragments_for_words(segment, words)
+        groups: list[dict[str, Any]] = []
+        for index, word in enumerate(words):
+            start_ms, end_ms, copied_word = _word_time_range(word, segment, index, len(words))
+            diarization_segment = _best_diarization_segment_for_range(start_ms, end_ms, diarization_segments)
+            speaker_key = _diarization_speaker_key(diarization_segment or {})
+            if not speaker_key:
+                speaker_key = groups[-1]["speakerKey"] if groups else ""
+            if not groups or groups[-1]["speakerKey"] != speaker_key:
+                groups.append({"speakerKey": speaker_key, "words": [], "textFragments": [], "startMs": start_ms, "endMs": end_ms})
+            groups[-1]["words"].append(copied_word)
+            groups[-1]["textFragments"].append(source_fragments[index])
+            groups[-1]["endMs"] = end_ms
+        if len(groups) <= 1:
+            output.append(dict(segment))
+            continue
+        source_id = str(segment.get("id") or f"segment-{len(output) + 1}")
+        split_output: list[dict[str, Any]] = []
+        for group_index, group in enumerate(groups, start=1):
+            text = "".join(group["textFragments"])
+            if not text:
+                continue
+            split_segment = dict(segment)
+            split_segment.update(
+                {
+                    "id": f"{source_id}-speaker-{group_index}",
+                    "sourceSegmentId": source_id,
+                    "sourceSegmentIds": [source_id],
+                    "startMs": int(group["startMs"]),
+                    "endMs": int(group["endMs"]),
+                    "text": text,
+                    "rawText": text,
+                    "words": group["words"],
+                    "diarizationSpeakerKey": group["speakerKey"],
+                }
+            )
+            split_output.append(split_segment)
+        # 畸形 provider words 可能全为空；任何说话人增强都不能让原始 ASR 正文消失。
+        output.extend(split_output or [dict(segment)])
+    return output
 
 
 def apply_voiceprint_match_to_segments(
@@ -1762,17 +1932,17 @@ def apply_voiceprint_match_to_segments(
     patched = [dict(segment) for segment in segments]
     diarization_segments = (diarization_result or {}).get("segments") or []
     speaker_aliases: dict[str, str] = {}
-    speaker_voiceprints = _build_diarization_voiceprint_map(diarization_segments, audio_path) if diarization_segments else {}
+    speaker_identities = _build_diarization_identity_map(diarization_segments, audio_path) if diarization_segments else {}
     if diarization_segments:
         for segment in patched:
             best = max(diarization_segments, key=lambda item: _segment_overlap_ms(segment, item), default=None)
             if best and _segment_overlap_ms(segment, best) > 0:
                 speaker_key = _diarization_speaker_key(best)
-                matched_voiceprint = speaker_voiceprints.get(speaker_key)
-                if matched_voiceprint:
-                    segment.update(matched_voiceprint)
-                    segment["speakerClusterId"] = f"voiceprint-{matched_voiceprint.get('voiceprintId') or speaker_key}"
-                    segment["speakerSource"] = "diarization_voiceprint_match"
+                tracked_identity = speaker_identities.get(speaker_key)
+                if tracked_identity:
+                    # 与实时会议共享 tracker 输出字段；前端无需区分实时/导入即可按稳定 cluster
+                    # 合并连续同人，同时仍保留底层 segment 与原 diarization key。
+                    segment.update(tracked_identity)
                     continue
                 speaker_name = best.get("speakerName") or best.get("speaker_name") or best.get("name")
                 if not speaker_name:
@@ -2025,8 +2195,13 @@ def transcribe_file(file_id: str, req: TranscribeRequest) -> dict[str, Any]:
     if enable_diarization:
         # ASR 结果里的 speakerName 往往只是“speaker_0/待匹配发言人”。这里统一贴上声纹库匹配结果，
         # 让导入转写页和实时会议详情页都能直接显示“王忠/张三”这类提前录入的人名。
-        result["segments"] = apply_voiceprint_match_to_segments(
+        diarization_segments = (diarization_result or {}).get("segments") or []
+        diarization_split_segments = split_asr_segments_by_diarization(
             result.get("segments", []),
+            diarization_segments,
+        )
+        result["segments"] = apply_voiceprint_match_to_segments(
+            diarization_split_segments,
             file_record.get("path", ""),
             diarization_result,
         )

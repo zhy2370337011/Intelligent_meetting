@@ -21,6 +21,8 @@ import hashlib
 import json
 import math
 import os
+import shutil
+import subprocess
 import time
 import urllib.request
 import wave
@@ -713,32 +715,45 @@ def diarize(req: DiarizeRequest) -> dict[str, Any]:
     model_audio_path = source_path
     normalized_path: Path | None = None
     try:
-        # Windows 版 torchaudio 可能没有 ``sox_effects``，而 3D-Speaker 内部会对非 16k
-        # 输入调用它并直接报错。业务层录音虽然固定 16k，导入音频仍可能是 44.1/48k；
-        # 在模型边界用 NumPy 做单声道、16 位、16k 归一化，避免依赖系统 sox。
-        with wave.open(str(source_path), "rb") as wav_file:
-            channels = wav_file.getnchannels()
-            sample_width = wav_file.getsampwidth()
-            sample_rate = wav_file.getframerate()
-            frames = wav_file.readframes(wav_file.getnframes())
-        if channels != 1 or sample_width != 2 or sample_rate != 16000:
-            if sample_width != 2:
-                raise HTTPException(status_code=422, detail="说话人分离当前仅支持 16 位 PCM WAV 归一化")
-            samples = np.frombuffer(frames, dtype="<i2").reshape(-1, channels).astype(np.float32)
-            mono = samples.mean(axis=1)
-            if sample_rate != 16000 and mono.size:
-                target_length = max(1, int(round(mono.size * 16000 / sample_rate)))
-                source_axis = np.arange(mono.size, dtype=np.float64)
-                target_axis = np.linspace(0, max(0, mono.size - 1), target_length)
-                mono = np.interp(target_axis, source_axis, mono)
-            pcm16 = np.clip(np.rint(mono), -32768, 32767).astype("<i2")
+        # 实时浏览器录音通常已经是 WAV，但导入台账允许 MP3/M4A/MP4 等常见格式。旧实现
+        # 无条件 ``wave.open``，MP3 会在模型调用前抛错；业务后端为了保住 ASR 文本而降级，
+        # 最终页面只能显示“待匹配发言人”。先尝试无损读取 WAV，非 WAV 或非标准 PCM 统一
+        # 交给 ffmpeg 转成 16kHz/单声道/16 位 PCM，保证实时与导入进入同一个模型输入契约。
+        requires_ffmpeg = False
+        try:
+            with wave.open(str(source_path), "rb") as wav_file:
+                channels = wav_file.getnchannels()
+                sample_width = wav_file.getsampwidth()
+                sample_rate = wav_file.getframerate()
+            requires_ffmpeg = channels != 1 or sample_width != 2 or sample_rate != 16000
+        except (wave.Error, EOFError):
+            requires_ffmpeg = True
+
+        if requires_ffmpeg:
+            ffmpeg = shutil.which("ffmpeg")
+            if not ffmpeg:
+                raise HTTPException(status_code=422, detail="说话人分离需要 ffmpeg 将导入音频转换为 16k 单声道 WAV")
             normalized_path = MODEL_SERVICE_DATA_DIR / f"diarization-{uuid.uuid4().hex}.wav"
             normalized_path.parent.mkdir(parents=True, exist_ok=True)
-            with wave.open(str(normalized_path), "wb") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(16000)
-                wav_file.writeframes(pcm16.tobytes())
+            command = [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(source_path),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                str(normalized_path),
+            ]
+            try:
+                subprocess.run(command, check=True, capture_output=True, text=True, timeout=600)
+            except (subprocess.SubprocessError, OSError) as exc:
+                # 只报告转换错误，不把命令行中的本地完整目录或 ffmpeg stderr 暴露给前端。
+                raise HTTPException(status_code=422, detail=f"导入音频格式转换失败：{type(exc).__name__}") from exc
             model_audio_path = normalized_path
 
         result = model(str(model_audio_path), **kwargs)

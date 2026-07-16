@@ -145,6 +145,9 @@ const state = {
   transcriptQuery: "",
   transcriptSpeakerFilter: "",
   playbackActiveSegmentId: "",
+  // 音频刚载入时浏览器会在 00:00 主动触发 loadedmetadata/timeupdate。只有用户点击来源、
+  // 前后跳转或真正开始播放后才允许高亮逐字稿，避免“尚未播放却整块标绿”的假定位状态。
+  playbackInteractionStarted: false,
   // 逐字稿编辑态始终绑定进入编辑时的 revision，并按底层 segment id 保存草稿。
   // 连续同一发言人虽然显示为一个框，但这里绝不把 segment 真正合并，保证音频和 AI 来源稳定。
   transcriptEditMode: false,
@@ -616,6 +619,7 @@ function scrollToSourceSegment(id, startMs = 0) {
   // Source navigation never changes route or mutates the transcript. It only focuses the durable
   // segment and advances the local player position so reviewers keep their current workbench context.
   state.playbackActiveSegmentId = String(id);
+  state.playbackInteractionStarted = true;
   $$(".speech-segment.is-active").forEach((item) => item.classList.remove("is-active"));
   segment.classList.add("is-active");
   const audioPlayer = $("bottomAudioPlayer");
@@ -646,8 +650,12 @@ function syncPlaybackActiveSegment() {
   const meeting = getCurrentMeeting();
   if (!(mediaElement instanceof HTMLMediaElement) || !meeting) return;
   const currentMs = Math.max(0, mediaElement.currentTime * 1000);
-  const active = (meeting.segments || []).find((segment) => currentMs >= Number(segment.startMs || 0)
-    && currentMs < Number(segment.endMs || segment.startMs || 0));
+  // 浏览器为新音频建立元数据时也会产生位于 0 秒的 timeupdate。该事件不是用户播放操作，
+  // 因此在 interactionStarted=false 时必须保持无高亮；来源跳转和播放按钮会显式开启联动。
+  const active = state.playbackInteractionStarted
+    ? (meeting.segments || []).find((segment) => currentMs >= Number(segment.startMs || 0)
+      && currentMs < Number(segment.endMs || segment.startMs || 0))
+    : null;
   state.playbackActiveSegmentId = active ? String(active.id) : "";
   $$(".speech-segment").forEach((segment) => {
     segment.classList.toggle("is-active", Boolean(active) && segment.dataset.segmentId === String(active.id));
@@ -720,6 +728,9 @@ function bindDetailMediaEvents() {
   });
   mediaElement.addEventListener("timeupdate", syncPlaybackActiveSegment);
   mediaElement.addEventListener("play", () => {
+    // 从这一刻开始，timeupdate 才代表真实播放进度，可安全驱动逐字稿高亮。
+    state.playbackInteractionStarted = true;
+    syncPlaybackActiveSegment();
     const button = $("realtimePlayBtn");
     if (button) button.textContent = "⏸";
   });
@@ -737,6 +748,9 @@ function syncDetailMediaElement(meeting) {
   const sourceUrl = meeting?.audioUrl || meeting?.audio_url || meeting?.mediaUrl || meeting?.media_url || meeting?.audio?.url || "";
   const sourceKey = `${meeting?.id || "none"}:${sourceUrl || meeting?.files?.[0]?.id || "no-file"}`;
   if (mediaElement.dataset.sourceUrl === sourceKey) return;
+  // 切换会议/录音时清除上一场的播放定位。否则新媒体的 00:00 事件可能沿用旧会议的活动片段。
+  state.playbackActiveSegmentId = "";
+  state.playbackInteractionStarted = false;
   if (state.detailMediaObjectUrl && state.detailMediaSourceKey !== sourceKey) {
     URL.revokeObjectURL(state.detailMediaObjectUrl);
     state.detailMediaObjectUrl = "";
@@ -4116,7 +4130,12 @@ function bindEvents() {
     if (target.id === "rewindAudioBtn" || target.id === "forwardAudioBtn") {
       const media = $("detailMediaElement");
       if (!(media instanceof HTMLMediaElement) || !media.getAttribute("src")) showToast("当前会议没有可播放录音", "warning");
-      else media.currentTime = Math.max(0, Math.min(media.duration || Infinity, media.currentTime + (target.id === "rewindAudioBtn" ? -5 : 5)));
+      else {
+        // 用户主动前后跳转也属于音字联动操作；即使当前暂停，也要定位并高亮目标片段。
+        state.playbackInteractionStarted = true;
+        media.currentTime = Math.max(0, Math.min(media.duration || Infinity, media.currentTime + (target.id === "rewindAudioBtn" ? -5 : 5)));
+        syncPlaybackActiveSegment();
+      }
     }
     if (target.id === "playbackRateBtn") {
       const media = $("detailMediaElement");

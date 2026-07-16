@@ -2329,6 +2329,8 @@ td {
 }
 
 .speaker-panel.is-collapsed .panel-title-line,
+.speaker-panel.is-collapsed .panel-mode-tabs,
+.speaker-panel.is-collapsed .navigation-mode-hint,
 .speaker-panel.is-collapsed .speaker-row,
 .speaker-panel.is-collapsed #speakerList,
 .speaker-panel.is-collapsed .add-speaker-btn {
@@ -2342,16 +2344,15 @@ td {
 }
 
 .right-tool-dock.is-collapsed .tool-result-panel,
-.right-tool-dock.is-collapsed .tool-tab-bar button[data-detail-tool] {
+.right-tool-dock.is-collapsed .tool-tab-bar {
   display: none;
 }
 
-.right-tool-dock.is-collapsed .tool-tab-bar {
-  display: grid;
-  place-items: center;
-  padding: 0;
-  background: transparent;
-  border-bottom: 0;
+.right-tool-dock.is-collapsed > .tool-edge-toggle {
+  /* 展开入口不依赖已隐藏的标签栏，并强制留在 56px 收起轨道内。 */
+  display: inline-grid;
+  top: 12px;
+  left: 11px;
 }
 
 .tool-collapse-button {
@@ -2898,7 +2899,7 @@ td {
   text-align: right;
 }
 
-.speech-segment.is-active {
+.speech-block-paragraph.is-active {
   margin-inline: -10px;
   padding-inline: 10px;
   background: #edf7f1;
@@ -3019,7 +3020,7 @@ td {
     text-align: left;
   }
 
-  .speech-segment.is-active {
+  .speech-block-paragraph.is-active {
     margin-inline: 0;
   }
 
@@ -3940,9 +3941,15 @@ body {
 }
 
 .merged-segment-fragment.is-active {
+  /* 行内片段不得继承编辑态块元素的负外边距、内边距和左边框，否则一段正文会形成异形色块。 */
+  margin: 0;
+  padding: 0;
   background: #e3f2e9;
+  border: 0;
   border-radius: 4px;
   box-shadow: 0 0 0 3px #e3f2e9;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* 用户明确要求给 AI 工具更多操作空间。大屏将右栏提升到 500～600px，并让逐字稿
@@ -4196,6 +4203,12 @@ body {
 
   .detail-workbench.speaker-collapsed.tools-collapsed {
     grid-template-columns: 52px minmax(440px, 1fr) 56px;
+  }
+
+  .transcript-workbench-bar {
+    /* 1366px 笔记本下中栏只剩约 440px；筛选框继续保留 180px 会让其未裁切矩形
+       伸进右栏展开按钮。搜索框允许弹性收缩，发言人筛选上限降到 140px，文字仍完整可读。 */
+    grid-template-columns: minmax(0, 1fr) minmax(110px, 140px) auto;
   }
 }
 
